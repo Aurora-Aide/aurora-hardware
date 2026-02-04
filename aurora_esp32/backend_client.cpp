@@ -46,7 +46,7 @@ bool BackendClient::parseConfigPayload(const String& payload, ScheduleStore& sto
   for (JsonObject c : containers_json) {
     ContainerSchedules cs;
     cs.slot_number = c["slot_number"] | -1;
-    cs.pill_name = String((const char*)c["pill_name"] | "");
+    cs.pill_name = String(c["pill_name"] | "");
 
     JsonArray schedules_json = c["schedules"].as<JsonArray>();
     cs.schedules.reserve(schedules_json.size());
