@@ -16,12 +16,26 @@ unsigned long last_poll_ms = 0;
 RTC_DS3231 rtc;
 bool rtc_ready = false;
 
-Stepper stepper_motor(
+Stepper stepper_motor_1(
     config::STEPS_PER_REV,
-    config::STEPPER_IN1_PIN,
-    config::STEPPER_IN3_PIN,
-    config::STEPPER_IN2_PIN,
-    config::STEPPER_IN4_PIN);
+    config::STEPPER1_IN1_PIN,
+    config::STEPPER1_IN3_PIN,
+    config::STEPPER1_IN2_PIN,
+    config::STEPPER1_IN4_PIN);
+
+Stepper stepper_motor_2(
+    config::STEPS_PER_REV,
+    config::STEPPER2_IN1_PIN,
+    config::STEPPER2_IN3_PIN,
+    config::STEPPER2_IN2_PIN,
+    config::STEPPER2_IN4_PIN);
+
+Stepper stepper_motor_3(
+    config::STEPS_PER_REV,
+    config::STEPPER3_IN1_PIN,
+    config::STEPPER3_IN3_PIN,
+    config::STEPPER3_IN2_PIN,
+    config::STEPPER3_IN4_PIN);
 
 struct DispenseState {
   int id = -1;
@@ -86,10 +100,28 @@ void initRtc() {
   rtc_ready = true;
 }
 
-void dispenseStep() {
+Stepper* motorForSlot(int slot_number) {
+  switch (slot_number) {
+    case 1:
+      return &stepper_motor_1;
+    case 2:
+      return &stepper_motor_2;
+    case 3:
+      return &stepper_motor_3;
+    default:
+      return nullptr;
+  }
+}
+
+void dispenseStepForSlot(int slot_number) {
+  Stepper* motor = motorForSlot(slot_number);
+  if (motor == nullptr) {
+    Serial.printf("[dispense] No motor mapped for slot %d\n", slot_number);
+    return;
+  }
   long steps = (static_cast<long>(config::STEPS_PER_REV) * config::DEGREES_PER_DROP) / 360L;
   if (steps <= 0) return;
-  stepper_motor.step(steps);
+  motor->step(steps);
 }
 
 void checkSchedulesAndDispense() {
@@ -111,7 +143,7 @@ void checkSchedulesAndDispense() {
 
       Serial.printf("[dispense] slot=%d schedule=%d %02u:%02u\n",
                     c.slot_number, s.id, s.hour, s.minute);
-      dispenseStep();
+      dispenseStepForSlot(c.slot_number);
 
       state.last_key = key;
       if (!s.repeat) state.nonrepeat_done = true;
@@ -152,7 +184,9 @@ void setup() {
   delay(500);
   connectWiFi();
   initRtc();
-  stepper_motor.setSpeed(config::STEPPER_RPM);
+  stepper_motor_1.setSpeed(config::STEPPER_RPM);
+  stepper_motor_2.setSpeed(config::STEPPER_RPM);
+  stepper_motor_3.setSpeed(config::STEPPER_RPM);
   // Fetch immediately on boot.
   pollConfigIfNeeded();
 }

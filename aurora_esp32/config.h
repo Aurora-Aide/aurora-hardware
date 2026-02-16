@@ -18,19 +18,29 @@ constexpr const char* DEVICE_SECRET = "YOUR-DEVICE-SECRET";
 // Poll interval for schedules/config (ms).
 constexpr uint32_t POLL_INTERVAL_MS = 5000;
 
-// I2C configuration for DS3231 (adjust pins for your ESP32-S3 board).
+// I2C configuration 
 constexpr uint8_t I2C_SDA_PIN = 8;
 constexpr uint8_t I2C_SCL_PIN = 9;
 constexpr uint32_t I2C_FREQUENCY_HZ = 100000;
 
-// ULN2003 stepper driver pins (IN1..IN4). Rewire to match these.
-constexpr uint8_t STEPPER_IN1_PIN = 4;
-constexpr uint8_t STEPPER_IN2_PIN = 5;
-constexpr uint8_t STEPPER_IN3_PIN = 6;
-constexpr uint8_t STEPPER_IN4_PIN = 7;
+// ULN2003 stepper driver pins
+constexpr uint8_t STEPPER1_IN1_PIN = 4;
+constexpr uint8_t STEPPER1_IN2_PIN = 5;
+constexpr uint8_t STEPPER1_IN3_PIN = 6;
+constexpr uint8_t STEPPER1_IN4_PIN = 7;
+
+constexpr uint8_t STEPPER2_IN1_PIN = 15;
+constexpr uint8_t STEPPER2_IN2_PIN = 16;
+constexpr uint8_t STEPPER2_IN3_PIN = 17;
+constexpr uint8_t STEPPER2_IN4_PIN = 18;
+
+constexpr uint8_t STEPPER3_IN1_PIN = 35;
+constexpr uint8_t STEPPER3_IN2_PIN = 36;
+constexpr uint8_t STEPPER3_IN3_PIN = 37;
+constexpr uint8_t STEPPER3_IN4_PIN = 38;
 
 // Stepper motor calibration.
-constexpr int STEPS_PER_REV = 2048;  // Common for 28BYJ-48 with gearbox.
+constexpr int STEPS_PER_REV = 2048;
 constexpr int DEGREES_PER_DROP = 36;
 constexpr int STEPPER_RPM = 10;
 
