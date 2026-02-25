@@ -5,18 +5,17 @@
 namespace config {
 
 // Wi-Fi credentials (replace with your network).
-constexpr const char* WIFI_SSID = "YOUR_WIFI_SSID";
-constexpr const char* WIFI_PASSWORD = "YOUR_WIFI_PASSWORD";
+constexpr const char* WIFI_SSID = "Di1";
+constexpr const char* WIFI_PASSWORD = "15301530";
 
 // Backend configuration.
-constexpr const char* BACKEND_BASE_URL = "http://127.0.0.1:8000";
+constexpr const char* BACKEND_BASE_URL = "http://192.168.1.129:8000";
 
 // Device identity (must match backend dispenser record).
-constexpr const char* DEVICE_SERIAL_ID = "S-20260117-0001";
-constexpr const char* DEVICE_SECRET = "YOUR-DEVICE-SECRET";
+constexpr const char* DEVICE_SERIAL_ID = "L-20260218-0022";
 
 // Poll interval for schedules/config (ms).
-constexpr uint32_t POLL_INTERVAL_MS = 5000;
+constexpr uint32_t POLL_INTERVAL_MS = 30000;
 
 // I2C configuration 
 constexpr uint8_t I2C_SDA_PIN = 8;
@@ -50,5 +49,11 @@ constexpr const char* ROOT_CA_PEM = "";
 // HTTP timeouts (ms).
 constexpr uint16_t HTTP_TIMEOUT_MS = 5000;
 
+// Catch-up tolerance: if we're later than this, DON'T dispense; mark missed instead.
+constexpr uint32_t CATCHUP_TOLERANCE_SECONDS = 3600;  // 1 hour
+
 }  // namespace config
+
+// Motor logging: set to 1 to print PROGRESS spam during rotation.
+#define ROTATION_LOG_PROGRESS 0
 
