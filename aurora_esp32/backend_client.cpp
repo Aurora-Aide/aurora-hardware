@@ -81,6 +81,14 @@ void BackendClient::saveSecret(const String& secret) {
   prefs_.putString("device_secret", secret);
 }
 
+void BackendClient::clearSecret() {
+  ensurePrefs();
+  device_secret_ = "";
+  is_paired_ = false;
+  prefs_.remove("device_secret");
+  Serial0.println("[backend] Cleared local device secret from NVS");
+}
+
 String BackendClient::deviceSecret() const {
   return device_secret_;
 }
@@ -217,24 +225,40 @@ bool BackendClient::fetchConfig(ScheduleStore& store) {
     return false;
   }
 
-  HTTPClient http;
-  http.setTimeout(config::HTTP_TIMEOUT_MS);
+  auto doGetConfig = [&](int& outCode, String& outPayload) -> bool {
+    HTTPClient http;
+    http.setTimeout(config::HTTP_TIMEOUT_MS);
 
-  String url = configUrl();
-  Serial0.printf("[backend] GET %s\n", url.c_str());
+    String url = configUrl();
+    Serial0.printf("[backend] GET %s\n", url.c_str());
 
-  if (!beginHttp(http, url)) {
-    Serial0.println("[backend] http.begin FAILED");
-    return false;
+    if (!beginHttp(http, url)) {
+      Serial0.println("[backend] http.begin FAILED");
+      return false;
+    }
+
+    http.addHeader("X-Device-Secret", deviceSecret());
+    outCode = http.GET();
+    outPayload = http.getString();
+    http.end();
+    printHttpResult(outCode, outPayload);
+    return true;
+  };
+
+  int code = 0;
+  String payload;
+  if (!doGetConfig(code, payload)) return false;
+
+  if (code == HTTP_CODE_UNAUTHORIZED || code == HTTP_CODE_FORBIDDEN) {
+    Serial0.println("[backend] Auth rejected (401/403). Local secret may be stale.");
+    clearSecret();
+    if (!ensurePaired()) {
+      Serial0.println("[backend] Re-pair failed after auth rejection");
+      return false;
+    }
+    Serial0.println("[backend] Re-paired. Retrying config fetch...");
+    if (!doGetConfig(code, payload)) return false;
   }
-
-  http.addHeader("X-Device-Secret", deviceSecret());
-
-  int code = http.GET();
-  String payload = http.getString();
-  http.end();
-
-  printHttpResult(code, payload);
 
   if (code != HTTP_CODE_OK) return false;
 
@@ -278,6 +302,11 @@ bool BackendClient::postEvent(const String& status, const String& occurred_at_is
   http.end();
 
   printHttpResult(code, payload);
+
+  if (code == HTTP_CODE_UNAUTHORIZED || code == HTTP_CODE_FORBIDDEN) {
+    Serial0.println("[backend] Event auth rejected (401/403). Clearing local secret.");
+    clearSecret();
+  }
 
   return (code == HTTP_CODE_NO_CONTENT);
 }
