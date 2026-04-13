@@ -4,6 +4,7 @@
 #include <RTClib.h>
 #include <Stepper.h>
 #include <Preferences.h>
+#include <time.h>
 #include <vector>
 
 #include "backend_client.h"
@@ -17,6 +18,9 @@ unsigned long last_poll_ms = 0;
 
 RTC_DS3231 rtc;
 bool rtc_ready = false;
+bool ntp_ready = false;
+bool ntp_configured = false;
+unsigned long last_ntp_attempt_ms = 0;
 
 Preferences drop_prefs;
 bool drop_prefs_ready = false;
@@ -87,6 +91,110 @@ DateTime idealOccurrenceThisWeek(const DateTime& week_start, const ScheduleEntry
   return DateTime(ideal_unix);
 }
 
+bool ensureNtpTime() {
+  if (WiFi.status() != WL_CONNECTED) return false;
+
+  unsigned long now_ms = millis();
+  if (now_ms - last_ntp_attempt_ms < 10000) {
+    return ntp_ready;
+  }
+  last_ntp_attempt_ms = now_ms;
+
+  if (!ntp_configured) {
+    long effective_offset = config::NTP_GMT_OFFSET_SECONDS + config::NTP_DAYLIGHT_OFFSET_SECONDS;
+    Serial0.printf("[ntp] offsets: gmt=%ld dst=%d total=%ld seconds\n",
+                   config::NTP_GMT_OFFSET_SECONDS,
+                   config::NTP_DAYLIGHT_OFFSET_SECONDS,
+                   effective_offset);
+    if (config::NTP_DAYLIGHT_OFFSET_SECONDS != 0 && config::NTP_DAYLIGHT_OFFSET_SECONDS != 3600) {
+      Serial0.println("[ntp] WARNING: DST offset should usually be 0 or 3600 seconds");
+    }
+    configTime(
+        config::NTP_GMT_OFFSET_SECONDS,
+        config::NTP_DAYLIGHT_OFFSET_SECONDS,
+        config::NTP_SERVER_1,
+        config::NTP_SERVER_2);
+    ntp_configured = true;
+    Serial0.println("[ntp] configured");
+  }
+
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 1000)) {
+    Serial0.println("[ntp] sync failed");
+    ntp_ready = false;
+    return false;
+  }
+
+  if (!ntp_ready) {
+    Serial0.printf("[ntp] synced: %04d-%02d-%02d %02d:%02d:%02d\n",
+                   timeinfo.tm_year + 1900,
+                   timeinfo.tm_mon + 1,
+                   timeinfo.tm_mday,
+                   timeinfo.tm_hour,
+                   timeinfo.tm_min,
+                   timeinfo.tm_sec);
+  }
+  ntp_ready = true;
+  return true;
+}
+
+bool getCurrentDateTime(DateTime& out, const char*& source) {
+  if (rtc_ready) {
+    out = rtc.now();
+    source = "RTC";
+    return true;
+  }
+
+  if (!ensureNtpTime()) {
+    source = "NONE";
+    return false;
+  }
+
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 1000)) {
+    ntp_ready = false;
+    source = "NONE";
+    return false;
+  }
+
+  out = DateTime(
+      timeinfo.tm_year + 1900,
+      timeinfo.tm_mon + 1,
+      timeinfo.tm_mday,
+      timeinfo.tm_hour,
+      timeinfo.tm_min,
+      timeinfo.tm_sec);
+  source = "NTP";
+  return true;
+}
+
+void logCurrentTimeIfNeeded() {
+  static unsigned long last_log_ms = 0;
+  unsigned long now_ms = millis();
+  if (now_ms - last_log_ms < 10000) return;
+  last_log_ms = now_ms;
+
+  DateTime now;
+  const char* source = "NONE";
+  if (!getCurrentDateTime(now, source)) {
+    Serial0.println("[time] source=NONE (RTC/NTP unavailable)");
+    return;
+  }
+
+  uint8_t dow_backend = (now.dayOfTheWeek() + 6) % 7;
+  const char* days[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+  Serial0.printf("[time] source=%s now=%04d-%02d-%02d %s %02d:%02d:%02d (DOW=%u)\n",
+                 source,
+                 now.year(),
+                 now.month(),
+                 now.day(),
+                 days[dow_backend],
+                 now.hour(),
+                 now.minute(),
+                 now.second(),
+                 dow_backend);
+}
+
 bool connectWiFi() {
   static bool configured = false;
   static bool started = false;
@@ -147,6 +255,12 @@ bool connectWiFi() {
 void initRtc() {
   Serial0.println("[rtc] init start");
 
+  if (!config::USE_HARDWARE_RTC) {
+    rtc_ready = false;
+    Serial0.println("[rtc] DS3231 disabled by config (NTP fallback mode)");
+    return;
+  }
+
   Wire.begin(config::I2C_SDA_PIN, config::I2C_SCL_PIN);
   Wire.setClock(config::I2C_FREQUENCY_HZ);
   Wire.setTimeOut(100);               // <-- IMPORTANT (ms): prevents I2C hang -> WDT reset
@@ -154,6 +268,7 @@ void initRtc() {
   if (!rtc.begin()) {
     Serial0.println("[rtc] DS3231 not found");
     rtc_ready = false;
+    Serial0.println("[time] RTC unavailable, will try NTP fallback when Wi-Fi is up");
     return;
   }
 
@@ -224,11 +339,13 @@ void dispenseStepForSlot(int slot_number) {
 }
 
 void checkSchedulesAndDispense() {
-  if (!rtc_ready) {
+  DateTime now;
+  const char* time_source = "NONE";
+  if (!getCurrentDateTime(now, time_source)) {
     static unsigned long last_warn = 0;
     if (millis() - last_warn > 5000) {
       last_warn = millis();
-      Serial0.println("[schedule] SKIP: RTC not ready");
+      Serial0.println("[schedule] SKIP: No valid time source (RTC/NTP unavailable)");
     }
     return;
   }
@@ -243,7 +360,6 @@ void checkSchedulesAndDispense() {
     return;
   }
 
-  DateTime now = rtc.now();
   uint8_t dow_backend = (now.dayOfTheWeek() + 6) % 7;
   uint8_t hour = now.hour();
   uint8_t minute = now.minute();
@@ -255,14 +371,16 @@ void checkSchedulesAndDispense() {
   if (minute != last_logged_minute) {
     last_logged_minute = minute;
     const char* days[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
-    Serial0.printf("[schedule] Current time: %s %02u:%02u (DOW=%u)\n",
-                   days[dow_backend], hour, minute, dow_backend);
+    Serial0.printf("[schedule] Current time (%s): %s %02u:%02u (DOW=%u)\n",
+                   time_source, days[dow_backend], hour, minute, dow_backend);
   }
 
   // Debug: log schedule checking (every 5 seconds)
   static unsigned long last_schedule_debug = 0;
+  bool debug_window = false;
   if (millis() - last_schedule_debug > 5000) {
     last_schedule_debug = millis();
+    debug_window = true;
     int total_schedules = 0;
     for (const auto& c : schedule_store.containers()) {
       total_schedules += c.schedules.size();
@@ -284,21 +402,54 @@ void checkSchedulesAndDispense() {
       // - Otherwise don't drop (already dropped or not due yet)
       DateTime ideal = idealOccurrenceThisWeek(week_start, s);
       uint32_t ideal_ts = ideal.unixtime();
+      uint32_t last_drop_ts = getLastDropTs(s.id);
+
+      if (debug_window) {
+        long late_s_dbg = (now_ts >= ideal_ts) ? (long)(now_ts - ideal_ts) : -((long)(ideal_ts - now_ts));
+        Serial0.printf(
+            "[schedule] eval slot=%d id=%d cfg=%u %02u:%02u repeat=%s ideal=%s last_drop_ts=%lu late_s=%ld\n",
+            c.slot_number,
+            s.id,
+            s.day_of_week,
+            s.hour,
+            s.minute,
+            s.repeat ? "true" : "false",
+            formatISO8601(ideal).c_str(),
+            (unsigned long)last_drop_ts,
+            late_s_dbg);
+      }
 
       if (now_ts < ideal_ts) {
         // Not due yet (we do NOT do early catch-up)
+        if (debug_window) Serial0.println("[schedule] reason=not_due_yet");
         continue;
       }
 
-      uint32_t last_drop_ts = getLastDropTs(s.id);
+      static unsigned long last_skip_log_ms = 0;
+      auto logSkipIfNeeded = [&](const char* reason) {
+        unsigned long now_ms = millis();
+        if (now_ms - last_skip_log_ms < 10000) return;
+        last_skip_log_ms = now_ms;
+        Serial0.printf(
+            "[schedule] SKIP: %s slot=%d schedule=%d repeat=%s now=%s ideal=%s last_drop_ts=%lu\n",
+            reason,
+            c.slot_number,
+            s.id,
+            s.repeat ? "true" : "false",
+            formatISO8601(now).c_str(),
+            formatISO8601(ideal).c_str(),
+            (unsigned long)last_drop_ts);
+      };
 
       if (!s.repeat && last_drop_ts != 0) {
         // One-shot schedule already executed at least once
+        logSkipIfNeeded("already handled non-repeat");
         continue;
       }
 
       if (last_drop_ts >= ideal_ts) {
         // Already dropped for (or after) this week's ideal time
+        logSkipIfNeeded("already handled this occurrence");
         continue;
       }
 
@@ -363,6 +514,17 @@ void checkSchedulesAndDispense() {
   }
 }
 
+void runMotorSelfTestIfEnabled() {
+#if ENABLE_MOTOR_SELF_TEST
+  static unsigned long last_test_ms = 0;
+  unsigned long now = millis();
+  if (now - last_test_ms < 10000) return;
+  last_test_ms = now;
+  Serial0.printf("[selftest] Rotating slot %d for hardware check\n", MOTOR_SELF_TEST_SLOT);
+  dispenseStepForSlot(MOTOR_SELF_TEST_SLOT);
+#endif
+}
+
 void pollConfigIfNeeded() {
   unsigned long now = millis();
   if (now - last_poll_ms < config::POLL_INTERVAL_MS) return;
@@ -413,7 +575,10 @@ void loop() {
   }
 
   connectWiFi();
+  logCurrentTimeIfNeeded();
+  if (!rtc_ready) ensureNtpTime();
   pollConfigIfNeeded();
+  runMotorSelfTestIfEnabled();
   checkSchedulesAndDispense();
 
   delay(50);

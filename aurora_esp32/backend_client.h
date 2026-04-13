@@ -30,6 +30,7 @@ class BackendClient {
   void ensurePrefs();
   bool ensurePaired();
   bool pairDevice();
+  void clearSecret();
 
   void loadSecret();
   void saveSecret(const String& secret);
