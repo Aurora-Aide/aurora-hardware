@@ -5,18 +5,18 @@
 namespace config {
 
 // Wi-Fi credentials (replace with your network).
-constexpr const char* WIFI_SSID = "Di1";
-constexpr const char* WIFI_PASSWORD = "15301530";
+constexpr const char* WIFI_SSID = "Kalina";
+constexpr const char* WIFI_PASSWORD = "kali2323";
 
 // Backend configuration.
-constexpr const char* BACKEND_BASE_URL = "http://192.168.1.131:8000";
+constexpr const char* BACKEND_BASE_URL = "http://10.188.5.42:8000";
 
 // Device identity (must match backend dispenser record).
-constexpr const char* DEVICE_SERIAL_ID = "L-20260218-0022";
+constexpr const char* DEVICE_SERIAL_ID = "L-20260425-0001";
 
 // Poll interval for schedules/config (ms).
-constexpr uint32_t POLL_INTERVAL_MS = 30000;
-
+constexpr uint32_t POLL_INTERVAL_MS = 10000;
+   
 // I2C configuration 
 constexpr uint8_t I2C_SDA_PIN = 8;
 constexpr uint8_t I2C_SCL_PIN = 9;
@@ -25,7 +25,7 @@ constexpr uint32_t I2C_FREQUENCY_HZ = 100000;
 // RTC hardware toggle:
 // - true  -> use DS3231 on I2C
 // - false -> skip DS3231 and use NTP fallback only
-constexpr bool USE_HARDWARE_RTC = false;
+constexpr bool USE_HARDWARE_RTC = true;
 
 // ULN2003 stepper driver pins
 constexpr uint8_t STEPPER1_IN1_PIN = 4;
@@ -38,10 +38,10 @@ constexpr uint8_t STEPPER2_IN2_PIN = 16;
 constexpr uint8_t STEPPER2_IN3_PIN = 17;
 constexpr uint8_t STEPPER2_IN4_PIN = 18;
 
-constexpr uint8_t STEPPER3_IN1_PIN = 35;
-constexpr uint8_t STEPPER3_IN2_PIN = 36;
-constexpr uint8_t STEPPER3_IN3_PIN = 37;
-constexpr uint8_t STEPPER3_IN4_PIN = 38;
+constexpr uint8_t STEPPER3_IN1_PIN = 10;
+constexpr uint8_t STEPPER3_IN2_PIN = 11;
+constexpr uint8_t STEPPER3_IN3_PIN = 12;
+constexpr uint8_t STEPPER3_IN4_PIN = 13;
 
 // Stepper motor calibration.
 constexpr int STEPS_PER_REV = 2048;

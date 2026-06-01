@@ -5,6 +5,7 @@
 #include <Stepper.h>
 #include <Preferences.h>
 #include <time.h>
+#include <sys/time.h>
 #include <vector>
 
 #include "backend_client.h"
@@ -21,6 +22,7 @@ bool rtc_ready = false;
 bool ntp_ready = false;
 bool ntp_configured = false;
 unsigned long last_ntp_attempt_ms = 0;
+unsigned long last_backend_time_attempt_ms = 0;
 
 Preferences drop_prefs;
 bool drop_prefs_ready = false;
@@ -115,12 +117,27 @@ bool ensureNtpTime() {
         config::NTP_SERVER_1,
         config::NTP_SERVER_2);
     ntp_configured = true;
-    Serial0.println("[ntp] configured");
+    Serial0.printf("[ntp] configured (server1=%s server2=%s)\n",
+                   config::NTP_SERVER_1,
+                   config::NTP_SERVER_2);
   }
 
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo, 1000)) {
-    Serial0.println("[ntp] sync failed");
+  // First sync often needs more than 1 second on some routers/APs.
+  // Retry with short delays so we don't give up too early.
+  bool synced = false;
+  for (int attempt = 1; attempt <= 5; ++attempt) {
+    if (getLocalTime(&timeinfo, 1500)) {
+      synced = true;
+      break;
+    }
+    Serial0.printf("[ntp] sync attempt %d/5 failed\n", attempt);
+    delay(200);
+  }
+  if (!synced) {
+    Serial0.printf("[ntp] sync failed (wifi=%d ip=%s). Check internet access and UDP/123.\n",
+                   (int)WiFi.status(),
+                   WiFi.localIP().toString().c_str());
     ntp_ready = false;
     return false;
   }
@@ -138,7 +155,40 @@ bool ensureNtpTime() {
   return true;
 }
 
+bool syncTimeFromBackend() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial0.println("[time] backend fallback skipped: wifi down");
+    return false;
+  }
+
+  unsigned long now_ms = millis();
+  if (now_ms - last_backend_time_attempt_ms < 10000) {
+    return false;
+  }
+  last_backend_time_attempt_ms = now_ms;
+
+  uint32_t unix_ts = 0;
+  if (!backend_client.fetchServerUnixTime(unix_ts)) {
+    Serial0.println("[time] backend fallback failed");
+    return false;
+  }
+
+  struct timeval tv;
+  tv.tv_sec = static_cast<time_t>(unix_ts);
+  tv.tv_usec = 0;
+  if (settimeofday(&tv, nullptr) != 0) {
+    Serial0.println("[time] backend fallback failed: settimeofday");
+    return false;
+  }
+
+  ntp_ready = true;
+  Serial0.printf("[time] source=BACKEND unix=%lu\n", static_cast<unsigned long>(unix_ts));
+  return true;
+}
+
 bool getCurrentDateTime(DateTime& out, const char*& source) {
+  bool used_backend_fallback = false;
+
   if (rtc_ready) {
     out = rtc.now();
     source = "RTC";
@@ -146,8 +196,11 @@ bool getCurrentDateTime(DateTime& out, const char*& source) {
   }
 
   if (!ensureNtpTime()) {
-    source = "NONE";
-    return false;
+    if (!syncTimeFromBackend()) {
+      source = "NONE";
+      return false;
+    }
+    used_backend_fallback = true;
   }
 
   struct tm timeinfo;
@@ -164,7 +217,7 @@ bool getCurrentDateTime(DateTime& out, const char*& source) {
       timeinfo.tm_hour,
       timeinfo.tm_min,
       timeinfo.tm_sec);
-  source = "NTP";
+  source = used_backend_fallback ? "BACKEND" : "NTP";
   return true;
 }
 
@@ -199,10 +252,12 @@ bool connectWiFi() {
   static bool configured = false;
   static bool started = false;
   static unsigned long lastAttempt = 0;
+  static unsigned long lastBegin = 0;
   static unsigned long lastFullReset = 0;
 
   if (!configured) {
     WiFi.mode(WIFI_STA);
+    WiFi.persistent(false);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
     configured = true;
@@ -214,9 +269,15 @@ bool connectWiFi() {
   // Start connecting immediately on first call.
   if (!started) {
     started = true;
+    lastBegin = now;
     lastAttempt = now;
     Serial0.printf("[wifi] begin %s\n", config::WIFI_SSID);
     WiFi.begin(config::WIFI_SSID, config::WIFI_PASSWORD);
+    return false;
+  }
+
+  // Avoid calling begin() too frequently; ESP32 can still be in connecting state.
+  if (now - lastBegin < 15000) {
     return false;
   }
 
@@ -231,7 +292,10 @@ bool connectWiFi() {
 
     // If SSID isn't found, calling begin again is reasonable.
     if (st == WL_NO_SSID_AVAIL) {
-      Serial0.printf("[wifi] begin %s (ssid not found)\n", config::WIFI_SSID);
+      Serial0.printf("[wifi] reset+begin %s (ssid not found)\n", config::WIFI_SSID);
+      WiFi.disconnect(false, false);
+      delay(100);
+      lastBegin = now;
       WiFi.begin(config::WIFI_SSID, config::WIFI_PASSWORD);
       return false;
     }
@@ -244,7 +308,8 @@ bool connectWiFi() {
       lastFullReset = now;
       Serial0.println("[wifi] soft reset + begin");
       WiFi.disconnect(false, false);
-      delay(50);
+      delay(100);
+      lastBegin = now;
       WiFi.begin(config::WIFI_SSID, config::WIFI_PASSWORD);
     }
   }
@@ -441,14 +506,8 @@ void checkSchedulesAndDispense() {
             (unsigned long)last_drop_ts);
       };
 
-      if (!s.repeat && last_drop_ts != 0) {
-        // One-shot schedule already executed at least once
-        logSkipIfNeeded("already handled non-repeat");
-        continue;
-      }
-
       if (last_drop_ts >= ideal_ts) {
-        // Already dropped for (or after) this week's ideal time
+        // Already handled for this specific occurrence (works for repeat and non-repeat).
         logSkipIfNeeded("already handled this occurrence");
         continue;
       }
