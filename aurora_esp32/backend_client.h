@@ -17,6 +17,7 @@ class BackendClient {
   bool fetchConfig(ScheduleStore& store);
   bool postEvent(const String& status, const String& occurred_at_iso8601,
                  int container_slot, int schedule_id);
+  bool fetchServerUnixTime(uint32_t& unix_ts);
 
  private:
   WiFiClient plain_client_;
@@ -38,6 +39,7 @@ class BackendClient {
   String configUrl() const;
   String eventsUrl() const;
   String pairUrl() const;
+  String timeUrl() const;
 
   bool parseConfigPayload(const String& payload, ScheduleStore& store);
 

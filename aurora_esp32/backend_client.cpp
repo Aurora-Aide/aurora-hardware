@@ -63,6 +63,13 @@ String BackendClient::pairUrl() const {
   return url;
 }
 
+String BackendClient::timeUrl() const {
+  String url = config::BACKEND_BASE_URL;
+  if (!url.endsWith("/")) url += "/";
+  url += "api/time/";
+  return url;
+}
+
 void BackendClient::loadSecret() {
   if (!prefs_ready_) return;
   device_secret_ = prefs_.getString("device_secret", "");
@@ -265,6 +272,56 @@ bool BackendClient::fetchConfig(ScheduleStore& store) {
   bool ok = parseConfigPayload(payload, store);
   Serial0.printf("[backend] parse ok=%s\n", ok ? "true" : "false");
   return ok;
+}
+
+bool BackendClient::fetchServerUnixTime(uint32_t& unix_ts) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial0.println("[time] backend sync skipped: wifi down");
+    return false;
+  }
+
+  HTTPClient http;
+  http.setTimeout(config::HTTP_TIMEOUT_MS);
+
+  String url = timeUrl();
+  Serial0.printf("[time] GET %s\n", url.c_str());
+
+  if (!beginHttp(http, url)) {
+    Serial0.println("[time] backend sync failed: http.begin");
+    return false;
+  }
+
+  int code = http.GET();
+  String payload = http.getString();
+  http.end();
+  printHttpResult(code, payload);
+
+  if (code != HTTP_CODE_OK) {
+    Serial0.printf("[time] backend sync failed: http=%d\n", code);
+    return false;
+  }
+
+  StaticJsonDocument<256> doc;
+  DeserializationError err = deserializeJson(doc, payload);
+  if (err) {
+    Serial0.printf("[time] backend sync failed: json=%s\n", err.c_str());
+    return false;
+  }
+
+  if (!doc.containsKey("unix")) {
+    Serial0.println("[time] backend sync failed: missing unix field");
+    return false;
+  }
+
+  uint64_t raw_unix = doc["unix"] | 0;
+  if (raw_unix == 0) {
+    Serial0.println("[time] backend sync failed: invalid unix value");
+    return false;
+  }
+
+  unix_ts = static_cast<uint32_t>(raw_unix);
+  Serial0.printf("[time] backend sync ok: unix=%lu\n", static_cast<unsigned long>(unix_ts));
+  return true;
 }
 
 bool BackendClient::postEvent(const String& status, const String& occurred_at_iso8601,
